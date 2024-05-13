@@ -20,6 +20,9 @@ module Docx
   #     puts d.text
   #   end
   class Document
+    DOC_REL_FILE_PATTERN = "word/_rels/document*.xml.rels".freeze
+    HYPERLINK_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink".freeze
+
     include Docx::SimpleInspect
 
     attr_reader :xml, :doc, :zip, :styles
@@ -104,6 +107,20 @@ module Docx
       @rels.xpath("//xmlns:Relationship[contains(@Type,'hyperlink')]")
     end
 
+    def add_hyperlink_rel(url, id = nil)
+      id = id || SecureRandom.uuid
+      xml = @rels
+      relationships_el = xml.at("Relationships")
+      new_rel = relationships_el.add_child("<Relationship>")
+      node = new_rel[0]
+      node.set_attribute("Id", id)
+      node.set_attribute("Type", HYPERLINK_TYPE)
+      node.set_attribute("Target", url)
+      node.set_attribute("TargetMode", "External")
+
+      update_rels(xml)
+    end
+
     ##
     # *Deprecated*
     #
@@ -142,6 +159,8 @@ module Docx
 
       end
       zip.close
+      @tmp_rels.try(:close)
+      @tmp_rels.try(:unlink)
     end
 
     # Output entire document as a StringIO object
@@ -195,11 +214,19 @@ module Docx
     end
 
     def load_rels
-      rels_entry = @zip.glob('word/_rels/document*.xml.rels').first
-      raise Errno::ENOENT unless rels_entry
+      @rels_entry = @zip.glob(DOC_REL_FILE_PATTERN).first
+      raise Errno::ENOENT unless @rels_entry
 
-      @rels_xml = rels_entry.get_input_stream.read
+      @rels_xml = @rels_entry.get_input_stream.read
       @rels = Nokogiri::XML(@rels_xml)
+    end
+
+    def update_rels(new_rels_xml)
+      @tmp_rels = Tempfile.new(File.basename(@rels_entry.name))
+      @tmp_rels.write(new_rels_xml.to_xml)
+      @tmp_rels.rewind
+
+      zip.replace(@rels_entry, @tmp_rels.path)
     end
 
     #--
